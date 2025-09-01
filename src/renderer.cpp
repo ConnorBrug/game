@@ -406,37 +406,18 @@ if (s.kind == 0) {
     const int    wVis     = s.width;
     int          topYVis  = bottomY - hVis;
 
-    // sink for floor + small pull dip
     const int sinkSrc = Pose::groundDropSrcPx(en) + Pose::crawlPullExtraDropSrcPx(en);
     const int sinkPx  = int(std::round(double(sinkSrc) * (double(hVis) / double(SM_H))));
-    topYVis += sinkPx;
+    topYVis += sinkPx; // ensure floor contact
 
     const int bottomYVis = topYVis + hVis;
     const int deY        = std::min(bufferHeight - 1, bottomYVis);
 
-    // subtle forward lean (more near head)
+    // Subtle forward lean: 0 at feet, max at head
     const int leanSrc   = Pose::forwardLeanSrcPx(en);
     const int leanPxMax = int(std::round(double(leanSrc) * (double(hVis) / double(SM_H))));
 
-    const bool isCrawling = (Pose::classify(en) == Pose::State::Crawl);
     const float flashT = (float)std::min(1.0, en.hitFlash / ENEMY_HIT_FLASH_SEC);
-
-    // helper: sample a nearby *non-arm* torso pixel (toward centerline) for backfill
-    auto sampleTorsoFill = [&](int tx, int ty) -> uint32_t {
-        if ((unsigned)ty >= (unsigned)SM_H) return 0;
-        const int cx = SM_W / 2;
-        int step = (tx < cx) ? +1 : -1;
-        // look up to 4 px toward centerline for a non-arm, non-transparent pixel
-        for (int k = step, tries = 0; tries < 4; k += step, ++tries) {
-            int nx = tx + k;
-            if ((unsigned)nx >= (unsigned)SM_W) break;
-            uint8_t mm = g_stickman_mask[ty * SM_W + nx];
-            if (mm == SM_ArmL || mm == SM_ArmR) continue;
-            uint32_t col = g_stickman[ty * SM_W + nx];
-            if ((col >> 24) != 0) return col;
-        }
-        return 0;
-    };
 
     for (int stripe = dsX; stripe <= deX; ++stripe) {
         int lx = stripe - offsetX;
@@ -446,9 +427,10 @@ if (s.kind == 0) {
         int texX = int((stripe - (-wVis / 2 + s.screenX)) * SM_W / double(wVis));
         if ((unsigned)texX >= (unsigned)SM_W) continue;
 
+        // no shear/tilt
         const int topYStripe = topYVis;
-        const int startY = std::max(0, topYStripe);
 
+        const int startY = std::max(0, topYStripe);
         for (int y = startY; y <= deY; ++y) {
             int d    = y - topYStripe;
             int texY = int((int64_t)d * SM_H / hVis);
@@ -457,55 +439,28 @@ if (s.kind == 0) {
             uint32_t px = g_stickman[texY * SM_W + texX];
             if ((px >> 24) == 0) continue;
 
+            // limb masking: skip missing limbs
             uint8_t m = g_stickman_mask[texY * SM_W + texX];
+            bool masked =
+                (!en.armL && m == SM_ArmL) ||
+                (!en.armR && m == SM_ArmR) ||
+                (!en.legL && m == SM_LegL) ||
+                (!en.legR && m == SM_LegR);
+            if (masked) continue;
 
-            // common lean shift (applies to body + arms)
+            // forward lean toward camera (more at head)
             int yLean = y + (leanPxMax * (SM_H - 1 - texY)) / (SM_H - 1);
-            if ((unsigned)yLean >= (unsigned)bufferHeight) continue;
 
-            // if arm pixel, we do two things:
-            //  1) draw a torso backfill at yLean (so no shoulder hole)
-            //  2) if the arm exists, draw the arm at its *shifted* location yDst
-            if (m == SM_ArmL || m == SM_ArmR) {
-                // (1) torso backfill using a nearby non-arm texel
-                uint32_t torsoFill = sampleTorsoFill(texX, texY);
-                if (torsoFill) {
-                    if (flashT > 0.f) { // apply hit flash to fill too
-                        uint8_t A = (torsoFill >> 24) & 255, R = (torsoFill >> 16) & 255, G = (torsoFill >> 8) & 255, B = torsoFill & 255;
-                        int r = int(R + (255 - R) * flashT);
-                        int g = int(G + ( 50 - G) * flashT);
-                        int b = int(B + ( 50 - B) * flashT);
-                        torsoFill = (uint32_t(A) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
-                    }
-                    putPixel(fb, stripe, yLean, torsoFill);
-                }
-
-                // (2) draw the arm only if that arm is present
-                const bool armPresent = (m == SM_ArmL ? en.armL : en.armR);
-                if (armPresent) {
-                    int yDst = yLean;
-                    if (isCrawling) {
-                        const bool isLeft = (m == SM_ArmL);
-                        const int reachSrc = Pose::armReachSrcPx(en, isLeft); // A = 4
-                        const int reachPx  = int(std::round(double(reachSrc) * (double(hVis) / double(SM_H))));
-                        yDst += reachPx;
-                    }
-                    if ((unsigned)yDst < (unsigned)bufferHeight) {
-                        uint32_t armPx = px;
-                        if (flashT > 0.f) {
-                            uint8_t A = (armPx >> 24) & 255, R = (armPx >> 16) & 255, G = (armPx >> 8) & 255, B = armPx & 255;
-                            int r = int(R + (255 - R) * flashT);
-                            int g = int(G + ( 50 - G) * flashT);
-                            int b = int(B + ( 50 - B) * flashT);
-                            armPx = (uint32_t(A) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
-                        }
-                        putPixel(fb, stripe, yDst, armPx);
-                    }
-                }
-                continue; // arm handled
+            // arm reach: ONLY draw at shifted location (no original fill -> no “second arm”)
+            int yDst = yLean;
+            if ((m == SM_ArmL || m == SM_ArmR) && Pose::classify(en) == Pose::State::Crawl) {
+                const bool isLeft  = (m == SM_ArmL);
+                const int  reachSrc = Pose::armReachSrcPx(en, isLeft); // A = 4
+                const int  reachPx  = int(std::round(double(reachSrc) * (double(hVis) / double(SM_H))));
+                yDst += reachPx;
             }
 
-            // non-arm pixel: draw at yLean
+            // hit flash
             if (flashT > 0.f) {
                 uint8_t A = (px >> 24) & 255, R = (px >> 16) & 255, G = (px >> 8) & 255, B = px & 255;
                 int r = int(R + (255 - R) * flashT);
@@ -513,7 +468,10 @@ if (s.kind == 0) {
                 int b = int(B + ( 50 - B) * flashT);
                 px = (uint32_t(A) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
             }
-            putPixel(fb, stripe, yLean, px);
+
+            if ((unsigned)yDst < (unsigned)bufferHeight) {
+                putPixel(fb, stripe, yDst, px);
+            }
         }
     }
 } else {

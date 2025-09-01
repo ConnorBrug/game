@@ -61,7 +61,7 @@ inline bool screenFor(const HitTest::Context& rc, double wx, double wy,
 struct Billboard {
     int leftX = 0, topY = 0, w = 0, h = 0, groundY = 0, spriteBot = 0, enX = 0;
     double enDepth = 0.0;
-    double tiltRad = 0.0;  // (disabled)
+    double tiltRad = 0.0;  // crawl tilt
 };
 inline bool buildBillboard(const HitTest::Context& rc, const Enemy& en, Billboard& bb) {
     if (!screenFor(rc, en.x, en.y, bb.enX, bb.enDepth)) return false;
@@ -98,7 +98,7 @@ inline bool buildBillboard(const HitTest::Context& rc, const Enemy& en, Billboar
     bb.w = sWidth;
     int top = spriteBot - bb.h;
 
-    // Include crawl dip + forward lean in the sink (no tilt)
+    // *** NEW: include crawl dip + forward lean in the sink ***
     const int sinkSrc = Pose::groundDropSrcPx(en)
                       + Pose::crawlPullExtraDropSrcPx(en)
                       + Pose::forwardLeanSrcPx(en);
@@ -107,7 +107,7 @@ inline bool buildBillboard(const HitTest::Context& rc, const Enemy& en, Billboar
 
     bb.topY  = top;
     bb.leftX = bb.enX - bb.w / 2;
-    bb.tiltRad = 0.0;
+    bb.tiltRad = 0.0; // no tilt
     return true;
 }
 
@@ -118,8 +118,12 @@ inline void srcToScreen(const Billboard& bb, double sx, double sy,
     outX = bb.leftX + sx * sxScale;
     outY = bb.topY  + sy * syScale;
 
-    // tilt disabled
-    (void)bb;
+    // Shear for crawl tilt (same as renderer)
+    if (std::fabs(bb.tiltRad) > 1e-6) {
+        const double centerX = (SM_W * 0.5);
+        const double yShiftSrc = (sx - centerX) * std::tan(bb.tiltRad) * (double(bb.h) / double(SM_W));
+        outY += yShiftSrc;
+    }
 }
 
 } // anonymous
@@ -148,36 +152,24 @@ Zone classify(const Context& rc, const Enemy& en,
 
     const StickGeom G = makeStickGeom();
 
-    // arm reach in screen pixels (match renderer)
-    const int reachLpx = en.armL ? int(std::round(Pose::armReachSrcPx(en, true ) * sY)) : 0;
-    const int reachRpx = en.armR ? int(std::round(Pose::armReachSrcPx(en, false) * sY)) : 0;
-
-    // --- helpers ---
-    auto segHit = [&](int sx0, int sy0, int sx1, int sy1, double thick) -> bool {
-        double ax, ay, bx2, by2; srcToScreen(bb, sx0, sy0, ax, ay); srcToScreen(bb, sx1, sy1, bx2, by2);
-        return dist2ToSeg(bpx, bulletY, ax, ay, bx2, by2) <= thick * thick;
-    };
-    auto segHitArm = [&](int sx0, int sy0, int sx1, int sy1, double thick, int yoff) -> bool {
-        double ax, ay, bx2, by2; srcToScreen(bb, sx0, sy0, ax, ay); srcToScreen(bb, sx1, sy1, bx2, by2);
-        ay  += yoff; by2 += yoff;
-        return dist2ToSeg(bpx, bulletY, ax, ay, bx2, by2) <= thick * thick;
-    };
-
-    // --- HEAD ---
+    // HEAD
     double hcX, hcY; srcToScreen(bb, G.cx, G.cy, hcX, hcY);
     const double headR = G.rHead * s;
     const double dhx = double(bpx) - hcX, dhy = double(bulletY) - hcY;
     if (dhx * dhx + dhy * dhy <= (headR + HEAD_THICK) * (headR + HEAD_THICK)) return Zone::Head;
 
-    // --- ARMS (with reach & limb-loss) ---
-    if (en.armL && segHitArm(G.armLx0, G.armLy0, G.armLx1, G.armLy1, ARM_THICK, reachLpx)) return Zone::ArmL;
-    if (en.armR && segHitArm(G.armRx0, G.armRy0, G.armRx1, G.armRy1, ARM_THICK, reachRpx)) return Zone::ArmR;
+    auto segHit = [&](int sx0, int sy0, int sx1, int sy1, double thick) -> bool {
+        double ax, ay, bx2, by2; srcToScreen(bb, sx0, sy0, ax, ay); srcToScreen(bb, sx1, sy1, bx2, by2);
+        return dist2ToSeg(bpx, bulletY, ax, ay, bx2, by2) <= thick * thick;
+    };
 
-    // --- LEGS ---
+    // arms/legs respect limb loss
+    if (en.armL && segHit(G.armLx0, G.armLy0, G.armLx1, G.armLy1, ARM_THICK)) return Zone::ArmL;
+    if (en.armR && segHit(G.armRx0, G.armRy0, G.armRx1, G.armRy1, ARM_THICK)) return Zone::ArmR;
     if (en.legL && segHit(G.legLx0, G.legLy0, G.legLx1, G.legLy1, LEG_THICK)) return Zone::LegL;
     if (en.legR && segHit(G.legRx0, G.legRy0, G.legRx1, G.legRy1, LEG_THICK)) return Zone::LegR;
 
-    // --- BODY (spine capsule) ---
+    // spine/body capsule
     double b0x, b0y, b1x, b1y; srcToScreen(bb, G.cx, G.bodyTopY, b0x, b0y); srcToScreen(bb, G.cx, G.bodyBotY, b1x, b1y);
     if (dist2ToSeg(bpx, bulletY, b0x, b0y, b1x, b1y) <= BODY_THICK * BODY_THICK) return Zone::Body;
 
