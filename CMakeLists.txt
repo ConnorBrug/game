@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(microdoom LANGUAGES CXX)
+project(game LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #   -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
 find_package(SDL2 CONFIG REQUIRED)
 
-add_executable(microdoom src/main.cpp
+add_executable(game src/main.cpp
         include/config.h
         include/types.h
         include/framebuffer.h
@@ -27,11 +27,20 @@ add_executable(microdoom src/main.cpp
         src/hittest.cpp
         include/pose.h
         src/pose.cpp
+        include/input.h
+        src/input.cpp
+        include/camera.h
+        src/camera.cpp
+        include/wallrun.h
+        src/wallrun.cpp
+        include/combat.h
+        src/combat.cpp
+        include/parkour_state.h
 )
 
 # Link SDL2 (and SDL2main if it exists on this platform/toolchain)
 if (TARGET SDL2::SDL2main)
-    target_link_libraries(microdoom PRIVATE SDL2::SDL2main SDL2::SDL2)
+    target_link_libraries(game PRIVATE SDL2::SDL2main SDL2::SDL2)
 else()
-    target_link_libraries(microdoom PRIVATE SDL2::SDL2)
+    target_link_libraries(game PRIVATE SDL2::SDL2)
 endif()

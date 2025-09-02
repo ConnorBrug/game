@@ -105,7 +105,7 @@ CMAKE_PROJECT_DESCRIPTION:STATIC=
 CMAKE_PROJECT_HOMEPAGE_URL:STATIC=
 
 //Value Computed by CMake
-CMAKE_PROJECT_NAME:STATIC=microdoom
+CMAKE_PROJECT_NAME:STATIC=game
 
 //RC compiler
 CMAKE_RC_COMPILER:FILEPATH=C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe
@@ -232,6 +232,15 @@ Z_VCPKG_PWSH_PATH:FILEPATH=Z_VCPKG_PWSH_PATH-NOTFOUND
 //The directory which contains the installed libraries for each
 // triplet
 _VCPKG_INSTALLED_DIR:PATH=C:/vcpkg/installed
+
+//Value Computed by CMake
+game_BINARY_DIR:STATIC=C:/Users/gunne/untitled8/cmake-build-debug
+
+//Value Computed by CMake
+game_IS_TOP_LEVEL:STATIC=ON
+
+//Value Computed by CMake
+game_SOURCE_DIR:STATIC=C:/Users/gunne/untitled8
 
 //Value Computed by CMake
 microdoom_BINARY_DIR:STATIC=C:/Users/gunne/untitled8/cmake-build-debug

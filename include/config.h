@@ -70,6 +70,9 @@ constexpr double LEG_SLOW_BOTH = 0.15;    // both legs gone (crawl)
 
 constexpr double ENEMY_HIT_FLASH_SEC = 0.95;
 
+const int POINTS_PER_KILL = 1; // tweak to taste
+
+
 // ---------------- Pose (crawl/tilt) ----------------
 constexpr double POSE_TILT_DEG        = 14.0;
 constexpr double POSE_CRAWL_RISE_SEC  = 0.25;
