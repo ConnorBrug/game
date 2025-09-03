@@ -1,21 +1,24 @@
 #pragma once
 #include "types.h"
-#include "framebuffer.h"
+
+struct Player;
+struct Enemy;
 
 namespace HitTest {
 
     enum class Zone { None, Head, Body, ArmL, ArmR, LegL, LegR };
 
     struct Context {
-        int     inW = 0, inH = 0;
-        double  fov = 0.0;
-        double  ppuZ = 0.0;
-        int     horizonBase = 0;
-        double  pitchRad = 0.0;
-        const Player* player = nullptr;
+        int    inW;
+        int    inH;
+        double fov;          // live FOV used for rendering this frame
+        double ppuZ;         // pixels-per-world-Z (same as renderer)
+        int    horizonBase;  // same horizon row used by renderer
+        double pitchRad;     // actual camera pitch used this frame
+        double wallScale;    // same wallScale you passed to renderer (includes ADS zoomMul)
+        const Player* player;
     };
 
-    // Classify which limb/body a bullet sample hits (analytic, screen-space)
     Zone classify(const Context& rc, const Enemy& en,
                   double bulletWorldZ, double bx, double by);
 

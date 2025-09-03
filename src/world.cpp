@@ -11,7 +11,7 @@ static constexpr float H_WALL        = 2.0f; // outer border
 static constexpr float H_TALL        = 2.6f; // run-able interior walls
 
 static constexpr int   SAFE_MARGIN   = 2;    // keep features off the very edge
-static constexpr int   END_GAP       = 4;    // how far each long wall stops before the border
+static constexpr int   END_GAP       = 16;    // how far each long wall stops before the border
 
 // orientation toggle: true = horizontal quarter walls, false = vertical quarter walls
 static constexpr bool  HORIZONTAL_WALLS = true;
@@ -84,6 +84,4 @@ void initWorld(){
     clearAll();
     addBorder();
     buildTwoQuarterWalls();
-
-    // No platforms, ramps, diagonals, or pillars — clean arena with just two long walls.
 }

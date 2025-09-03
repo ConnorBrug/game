@@ -31,10 +31,15 @@ void Input::handleEvent(const SDL_Event& e, InputState& s, bool mouseCaptured, b
                 if (!mouseCaptured) s.requestCapture = true;
                 s.mouseLeftDown = true;
             }
+        if (!gameOver && e.button.button == SDL_BUTTON_RIGHT) {
+            if (!mouseCaptured) s.requestCapture = true;
+            s.mouseRightDown = true;
+        }
         break;
 
         case SDL_MOUSEBUTTONUP:
-            if (e.button.button == SDL_BUTTON_LEFT) s.mouseLeftDown = false;
+            if (e.button.button == SDL_BUTTON_LEFT)  s.mouseLeftDown  = false;
+        if (e.button.button == SDL_BUTTON_RIGHT) s.mouseRightDown = false;
         break;
 
         default: break;

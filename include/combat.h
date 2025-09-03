@@ -1,19 +1,23 @@
 #pragma once
 #include <vector>
-#include "types.h"
-#include "hittest.h"
+
+struct Player;
+struct Enemy;
+struct Bullet;
 
 namespace Combat {
-    inline constexpr double FIRE_DELAY   = 0.12;  // matches your main
-    inline constexpr double MUZZLE_DIST  = 0.35;
 
-    // Returns true if fired; updates fireCooldown
+    // Fire a bullet if allowed.
+    // Pass `useFov` (the live render FOV) and `rollRad` (effective camera roll in radians).
     bool tryFire(std::vector<Bullet>& bullets, const Player& player,
                  bool triggerDown, double& fireCooldown,
-                 int inH, double ppuZ, double pitchRad, double viewZNow);
+                 int inH, double ppuZ, double pitchRad, double viewZNow,
+                 double adsT, double useFov, double rollRad);
 
-    // Returns number of hits this frame; updates enemies/bullets; consumes bullets on hit
+    // Step bullets, do collisions, return number of kills this frame.
     int updateBullets(std::vector<Bullet>& bullets, std::vector<Enemy>& enemies,
                       const Player& player, double dt,
-                      int inW, int inH, double fov, double ppuZ, int horizonBase);
-}
+                      int inW, int inH, double fov, double ppuZ, int horizonBase,
+                      double pitchRad, double wallScaleUsed);
+
+} // namespace Combat

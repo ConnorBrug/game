@@ -3,8 +3,9 @@
 
 struct InputState {
     // Per-frame accumulators
-    float mouseDX = 0.f, mouseDY = 0.f;
-    bool  mouseLeftDown = false;
+    float mouseDX = 0, mouseDY = 0;
+    bool  mouseLeftDown  = false;
+    bool  mouseRightDown = false;
 
     // Continuous axes/buttons
     float axisForward = 0.f; // W/S → +1/-1 (later: merge with controller)

@@ -48,12 +48,14 @@ inline bool screenFor(const HitTest::Context& rc, double wx, double wy,
     const double dirX = std::cos(rc.player->dir), dirY = std::sin(rc.player->dir);
     const double planeX = std::cos(rc.player->dir + kHalfPi) * std::tan(rc.fov / 2.0);
     const double planeY = std::sin(rc.player->dir + kHalfPi) * std::tan(rc.fov / 2.0);
+
     const double invDet = 1.0 / (planeX * dirY - dirX * planeY);
     const double dx = wx - rc.player->x, dy = wy - rc.player->y;
     const double transformX = invDet * (dirY * dx - dirX * dy);
     const double transformY = invDet * (-planeY * dx + planeX * dy);
     if (transformY <= 0.0 || transformY > SPRITE_FAR_CLIP) return false;
-    outX = int((rc.inW / 2.0) * (1.0 + transformX / transformY));
+
+    outX     = int((rc.inW / 2.0) * (1.0 + transformX / transformY));
     outDepth = transformY;
     return true;
 }
@@ -61,17 +63,20 @@ inline bool screenFor(const HitTest::Context& rc, double wx, double wy,
 struct Billboard {
     int leftX = 0, topY = 0, w = 0, h = 0, groundY = 0, spriteBot = 0, enX = 0;
     double enDepth = 0.0;
-    double tiltRad = 0.0;  // crawl tilt
+    double tiltRad = 0.0;
 };
+
 inline bool buildBillboard(const HitTest::Context& rc, const Enemy& en, Billboard& bb) {
     if (!screenFor(rc, en.x, en.y, bb.enX, bb.enDepth)) return false;
 
     const double sizeDepth = std::max(0.25, bb.enDepth);
-    const int sHeight = int(std::abs((rc.inH * WALL_SCALE * std::cos(rc.pitchRad)) / sizeDepth) * SPRITE_SCALE);
+
+    // IMPORTANT: use the SAME wallScale and pitch that the renderer used
+    const int sHeight = int(std::abs((rc.inH * rc.wallScale * std::cos(rc.pitchRad)) / sizeDepth) * SPRITE_SCALE);
     if (sHeight <= 0) return false;
     const int sWidth = int(sHeight * SM_W / double(SM_H));
 
-    const int colH = int(std::abs((rc.inH * WALL_SCALE * std::cos(rc.pitchRad)) / std::max(0.2, bb.enDepth)));
+    const int colH = int(std::abs((rc.inH * rc.wallScale * std::cos(rc.pitchRad)) / std::max(0.2, bb.enDepth)));
     const int groundY = rc.horizonBase + colH / 2;
     bb.groundY = groundY;
 
@@ -98,7 +103,6 @@ inline bool buildBillboard(const HitTest::Context& rc, const Enemy& en, Billboar
     bb.w = sWidth;
     int top = spriteBot - bb.h;
 
-    // *** NEW: include crawl dip + forward lean in the sink ***
     const int sinkSrc = Pose::groundDropSrcPx(en)
                       + Pose::crawlPullExtraDropSrcPx(en)
                       + Pose::forwardLeanSrcPx(en);
@@ -107,7 +111,7 @@ inline bool buildBillboard(const HitTest::Context& rc, const Enemy& en, Billboar
 
     bb.topY  = top;
     bb.leftX = bb.enX - bb.w / 2;
-    bb.tiltRad = 0.0; // no tilt
+    bb.tiltRad = 0.0; // (no shear here; renderer also draws enemies upright)
     return true;
 }
 
@@ -118,7 +122,6 @@ inline void srcToScreen(const Billboard& bb, double sx, double sy,
     outX = bb.leftX + sx * sxScale;
     outY = bb.topY  + sy * syScale;
 
-    // Shear for crawl tilt (same as renderer)
     if (std::fabs(bb.tiltRad) > 1e-6) {
         const double centerX = (SM_W * 0.5);
         const double yShiftSrc = (sx - centerX) * std::tan(bb.tiltRad) * (double(bb.h) / double(SM_W));
@@ -136,6 +139,8 @@ Zone classify(const Context& rc, const Enemy& en,
 
     int bpx = 0; double bDepth = 0.0;
     if (!screenFor(rc, bx, by, bpx, bDepth)) return Zone::None;
+
+    // Convert bullet world-Z to screen Y with the SAME horizon/ppuZ used by renderer
     const int bulletY = rc.horizonBase - int(std::lround(bulletWorldZ * rc.ppuZ));
 
     if (bpx < bb.leftX || bpx >= bb.leftX + bb.w) return Zone::None;
@@ -163,7 +168,6 @@ Zone classify(const Context& rc, const Enemy& en,
         return dist2ToSeg(bpx, bulletY, ax, ay, bx2, by2) <= thick * thick;
     };
 
-    // arms/legs respect limb loss
     if (en.armL && segHit(G.armLx0, G.armLy0, G.armLx1, G.armLy1, ARM_THICK)) return Zone::ArmL;
     if (en.armR && segHit(G.armRx0, G.armRy0, G.armRx1, G.armRy1, ARM_THICK)) return Zone::ArmR;
     if (en.legL && segHit(G.legLx0, G.legLy0, G.legLx1, G.legLy1, LEG_THICK)) return Zone::LegL;

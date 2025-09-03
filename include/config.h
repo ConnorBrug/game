@@ -8,6 +8,15 @@ constexpr int    SCREEN_H = 540;
 // Wider base FOV (radians) – "more zoomed out"
 constexpr double FOV_BASE = 1.7453292519943295; // 100°
 
+// ADD: zoomed (ADS) FOV (smaller angle = tighter zoom)
+constexpr double FOV_ZOOM = 1.0471975511965976; // 60°
+
+// ADD: mouse sensitivity multiplier while zooming (0..1)
+constexpr double ADS_SENS_MUL    = 0.45;
+
+// ADD: how quickly aim eases (higher = snappier)
+constexpr double ADS_LERP_PER_S  = 10.0;
+
 // Wall and sprite vertical scale
 constexpr double WALL_SCALE   = 9.5;
 constexpr double SPRITE_SCALE = 0.75;
@@ -21,13 +30,33 @@ constexpr double SIGHT_Z = 0.90;
 
 // ---------------- Bullets ----------------
 constexpr double BULLET_RADIUS   = 0.05;  // physical radius (world units)
-constexpr double BULLET_DIAM     = 0.10;  // sprite scale helper (renderer only)
-constexpr double BULLET_HIT_PAD  = 0.010; // tiny forgiveness ring
-constexpr double BULLET_LIFE_SEC = 2.0;   // timeout
-constexpr double BULLET_SPEED    = 40.5;  // moved here
+constexpr double BULLET_DIAM     = 0.05;  // sprite scale helper (renderer only)
+constexpr double BULLET_HIT_PAD  = 0.5;   // tiny forgiveness ring
+constexpr double BULLET_LIFE_SEC = 5.0;   // timeout
+constexpr double BULLET_SPEED    = 200.5;  // moved here
+
+// NEW: fraction of player velocity that projectiles inherit (1 = full)
+constexpr double BULLET_INHERIT_VEL = 1.0;
+
+// NEW: treat z<=this as ground contact for bullet removal
+constexpr double BULLET_GROUND_EPS = 0.02;
 
 // ---------------- Gun ----------------
-constexpr double MUZZLE_DIST = 0.35;      // muzzle forward offset
+// Base forward offset (hip) and ADS multiplier
+constexpr double MUZZLE_DIST          = 4;
+constexpr double MUZZLE_DIST_ADS_MUL  = 1;
+
+// Horizontal zero distance (hip) and ADS multiplier
+constexpr double MUZZLE_CONVERGE_M    = 10.0;
+constexpr double CONVERGE_ADS_MUL     = .3;
+
+// Lateral & vertical offsets
+constexpr double MUZZLE_SIDE          = 0;
+constexpr double MUZZLE_Z_OFF_HIP     = 0;
+constexpr double MUZZLE_Z_OFF_ADS     = 0; // closer to scope bore in ADS
+
+// Rate of fire (seconds between shots)
+constexpr double FIRE_DELAY      = 0.12;  // ~500 RPM
 
 // ---------------- Sizes ----------------
 constexpr double ENEMY_RADIUS   = 0.28;   // base size for stickman width

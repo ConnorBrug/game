@@ -1,5 +1,7 @@
-// renderer.cpp — walls first with per-column floor clip; stable pitch; sprites grounded.
-// Limb hiding uses g_stickman_mask (per-pixel). Crawl sink/tilt via Pose.
+// renderer.cpp — 360° pitch (wrap), no zoom-warp; sprites grounded.
+// Floor grid: exact ray–plane projection in WORLD space (no treadmill, no yaw-locked sprite).
+// pZ only shifts the final image (horizon/walls/sprites). Grid sampling ignores pZ
+// so jumping does not change the pattern. Grid is anchored to world XY.
 
 #include <algorithm>
 #include <cmath>
@@ -24,8 +26,13 @@
 static constexpr double kHalfPi = 1.5707963267948966;
 static constexpr double kTiny   = 1e-6;
 
-static constexpr double GRID_PERIOD = 5.0;
+// ==== grid tuning ====
+static constexpr double GRID_PERIOD     = 0.5;   // world units between grid lines
+static constexpr double GRID_HALF_THICK = 0.012; // world half thickness
+// =====================
+
 static constexpr double NEAR_CLAMP  = 0.035;
+static constexpr double kEyeHeightWorld = 0.5; // camera height in WORLD units; pZ is visual shift only
 
 Renderer::Renderer(int w, int h) { resize(w, h); }
 
@@ -62,7 +69,20 @@ void Renderer::render(Framebuffer& fb,
                       double rollDeg) {
     std::fill_n(fb.pixels, size_t(W) * size_t(H), 0xFF000000);
 
-    bool doRoll = std::fabs(rollDeg) > 0.75;
+    // ---- 360° pitch: wrap pitch, project with safe pitch, add 180° roll when upside down
+    auto wrapTwoPi = [](double a){ return std::remainder(a, 2.0 * M_PI); }; // (-pi, pi]
+    const double pitchWrapped = wrapTwoPi(pitchRad);
+    const bool   upsideDown   = std::cos(pitchWrapped) < 0.0;
+
+    // Keep projection pitch within (-pi/2, pi/2] to avoid tan() singularity
+    const double projPitch = upsideDown
+        ? (pitchWrapped > 0.0 ? pitchWrapped - M_PI : pitchWrapped + M_PI)
+        : pitchWrapped;
+
+    const double effectiveRollDeg = rollDeg + (upsideDown ? 180.0 : 0.0);
+    // ---- end wrap
+
+    bool doRoll = std::fabs(effectiveRollDeg) > 0.75;
     if (doRoll) {
         int diag = int(std::ceil(std::sqrt(double(W) * W + double(H) * H)));
         int padding = 8;
@@ -79,9 +99,9 @@ void Renderer::render(Framebuffer& fb,
         activeFbHeight = overscanH;
         renderWorldToBuffer(ofs, overscanH, W, H,
                             player, enemies, bullets,
-                            pZ, pitchRad, useFov, wallScale, pixelsPerUnitZ);
+                            pZ, projPitch, useFov, wallScale, pixelsPerUnitZ);
 
-        const double a  = -rollDeg * M_PI / 180.0;
+        const double a  = -effectiveRollDeg * M_PI / 180.0;
         const double ca = std::cos(a), sa = std::sin(a);
         const double sx = overscanW / 2.0, sy = overscanH / 2.0;
         const double dx = W / 2.0,       dy = H / 2.0;
@@ -109,7 +129,7 @@ void Renderer::render(Framebuffer& fb,
         activeFbHeight = H;
         renderWorldToBuffer(fb, H, W, H,
                             player, enemies, bullets,
-                            pZ, pitchRad, useFov, wallScale, pixelsPerUnitZ);
+                            pZ, projPitch, useFov, wallScale, pixelsPerUnitZ);
     }
 
     drawUI(fb, player, enemies, score, health, maxHealth, !showMinimap);
@@ -145,11 +165,20 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
     const int offsetX = (fbWidth      - baseWidth ) / 2;
     const int offsetY = (bufferHeight - baseHeight) / 2;
 
-    // -------- Sky / Horizon --------
-    const double tanP = std::tan(pitchRad);
+    // -------- Camera focal length from FOV (square pixels) --------
+    const double fx = (double(baseWidth) * 0.5) / std::tan(useFov * 0.5);
+    const double fy = fx;
 
+    const double sP = std::sin(pitchRad);
+    const double cP = std::cos(pitchRad);
+    const double eps = 1e-4;
+    const double tanSafe = sP / std::max(std::abs(cP), eps); // avoids tan blowups
+
+    // -------- Sky / Horizon (for walls + clipping) --------
+    const int pitchPx = int(std::lround(fy * tanSafe));
     const int horizonBase = baseHeight/2 +
-                            int(std::lround(pZ * pixelsPerUnitZ + (baseHeight/2.0) * tanP));
+                            int(std::lround(pZ * pixelsPerUnitZ)) + // pZ shifts the whole image
+                            pitchPx;
     const int horizon = offsetY + horizonBase;
 
     const uint32_t SKY_TOP   = ARGB(255, 178, 196, 214);
@@ -163,13 +192,11 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
         std::fill(row, row + fbWidth, c);
     }
 
-    // -------- Common ray basis --------
+    // -------- Common ray basis for walls --------
     const double dirX = std::cos(player.dir);
-       const double dirY = std::sin(player.dir);
+    const double dirY = std::sin(player.dir);
     const double planeX = std::cos(player.dir + kHalfPi) * std::tan(useFov / 2.0);
     const double planeY = std::sin(player.dir + kHalfPi) * std::tan(useFov / 2.0);
-    const double rayLX = dirX - planeX, rayLY = dirY - planeY;
-    const double rayRX = dirX + planeX, rayRY = dirY + planeY;
 
     std::vector<int> floorClip(fbWidth, horizon - 1);
 
@@ -178,7 +205,7 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
     std::fill(zbuffer.begin(), zbuffer.end(), 1e30);
 
     for (int x = 0; x < fbWidth; ++x) {
-        const double u = (double(x) - (fbWidth * 0.5)) / (double(baseWidth) * 0.5);
+        const double u = (double(x) - (offsetX + baseWidth * 0.5)) / (double(baseWidth) * 0.5);
         const double cameraX = u;
 
         double rayDirX = dirX + planeX * cameraX;
@@ -271,43 +298,73 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
     }
 
     // -------- Floor (after walls) --------
+    // Exact ray→ground-plane (Z=0) per-row mapping in WORLD space.
+    // IMPORTANT:
+    //   • v DOES NOT include pZ → jumping doesn't change sampled world points.
+    //   • The horizontal step across the row must use the camera RIGHT vector,
+    //     not the FORWARD vector (this fixes the rotation/treadmill artifacts).
     const uint32_t FLOOR_BASE = ARGB(255, 176, 176, 176);
     const uint32_t LINE_FAR   = ARGB(255, 132, 132, 132);
     const uint32_t LINE_NEAR  = ARGB(255, 108, 108, 108);
     const uint32_t DOT_NEAR   = ARGB(255,  96,  96,  96);
 
-    const double K = (baseHeight * wallScale) * 0.5;
+    const double cy = offsetY + baseHeight * 0.5;
+    const double cx = offsetX + baseWidth  * 0.5;
+
+    const double yaw   = player.dir;
+    const double cYaw  = std::cos(yaw);
+    const double sYaw  = std::sin(yaw);
+    // World camera basis:
+    const double rightX = -sYaw, rightY =  cYaw;
+    const double fwdX   =  cYaw, fwdY   =  sYaw;
+
+    const double invFx = 1.0 / fx;
 
     const int floorStart = std::max(0, std::min(horizon, bufferHeight));
     for (int y = floorStart; y < bufferHeight; ++y) {
-        const int p = y - horizon; if (p <= 0) continue;
+        // Pixel center — do NOT include pZ in v
+        const double v = ((double(y) + 0.5) - cy) / fy;
 
-        const double rowDist = K / double(p);
+        // Pitch rotate direction (row-constant terms)
+        const double yPrime =  cP + v * sP;   // forward-like component
+        const double zPrime =  sP - v * cP;
 
-        const double startX = player.x + rayLX * rowDist;
-        const double startY = player.y + rayLY * rowDist;
-        const double stepX  = (rayRX - rayLX) * (rowDist / std::max(1, fbWidth - 1));
-        const double stepY  = (rayRY - rayLY) * (rowDist / std::max(1, fbWidth - 1));
+        if (zPrime >= -1e-8) continue; // above horizon → no intersection
 
-        float contrast = std::min(1.f, float(p) / 64.f);
+        // Intersection scale parameter; constant world eye height
+        const double t = kEyeHeightWorld / (-zPrime);
+
+        // Camera u at left edge & step per pixel
+        const double du  = invFx;
+        const double u0  = ((0.5 - cx) * invFx);
+
+        // WORLD position at x=0 using correct basis: world = player + t*(u*RIGHT + y'*FWD)
+        double wx = player.x + t * ( u0 * rightX + yPrime * fwdX );
+        double wy = player.y + t * ( u0 * rightY + yPrime * fwdY );
+
+        // Step when moving one pixel to the right on screen → along RIGHT vector
+        const double stepWx = t * du * rightX;
+        const double stepWy = t * du * rightY;
+
+        // Row shading
+        float contrast = std::min(1.f, float(y - horizon) / 64.f);
         const uint32_t LINE_COL = lerpColor(LINE_FAR, LINE_NEAR, contrast);
         const uint32_t DOT_COL  = lerpColor(LINE_FAR, DOT_NEAR, contrast);
 
-        const double stepLen = std::hypot(stepX, stepY);
-        const double thresh = std::clamp(0.45 * stepLen, 0.010, 0.035);
-
-        double wx = startX, wy = startY;
-        for (int x = 0; x < fbWidth; ++x, wx += stepX, wy += stepY) {
+        for (int x = 0; x < fbWidth; ++x, wx += stepWx, wy += stepWy) {
             if (y <= floorClip[x]) continue;
 
-            double fx = std::fmod(wx, GRID_PERIOD); if (fx < 0) fx += GRID_PERIOD;
-            double fy = std::fmod(wy, GRID_PERIOD); if (fy < 0) fy += GRID_PERIOD;
-            fx = std::min(fx, GRID_PERIOD - fx);
-            fy = std::min(fy, GRID_PERIOD - fy);
+            // WORLD-LOCKED modulo positions
+            double fxg = std::fmod(wx, GRID_PERIOD); if (fxg < 0) fxg += GRID_PERIOD;
+            double fyg = std::fmod(wy, GRID_PERIOD); if (fyg < 0) fyg += GRID_PERIOD;
 
-            bool onX = fx < thresh;
-            bool onY = fy < thresh;
-            uint32_t c = (onX && onY) ? DOT_COL : (onX || onY) ? LINE_COL : FLOOR_BASE;
+            // distance to nearest grid line in X/Y (WORLD units)
+            double dxg = std::min(fxg, GRID_PERIOD - fxg);
+            double dyg = std::min(fyg, GRID_PERIOD - fyg);
+
+            const bool onX = dxg < GRID_HALF_THICK;
+            const bool onY = dyg < GRID_HALF_THICK;
+            const uint32_t c = (onX && onY) ? DOT_COL : (onX || onY) ? LINE_COL : FLOOR_BASE;
 
             putPixel(fb, x, y, c);
         }
@@ -341,7 +398,7 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
         const int screenX = int((baseWidth / 2.0) * (1.0 + transformX / transformY)) + offsetX;
 
         double sizeDepth = std::max(0.25, transformY);
-        const int h = int(std::abs((baseHeight * wallScale * std::cos(pitchRad)) / sizeDepth) * scale * SPRITE_SCALE);
+        const int h = int(std::abs((baseHeight * wallScale) / sizeDepth) * scale * SPRITE_SCALE);
         const int w = int(h * wBase / double(hBase));
         if (w <= 0 || h <= 0) return;
 
@@ -369,25 +426,21 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
         have_baseline: ;
     }
 
-    static constexpr double SPRITE_PITCH_DAMP = 1.0;
-
-    const int horizonSpriteBase = baseHeight/2 +
-        int(std::lround(pZ * pixelsPerUnitZ + (baseHeight/2.0) * std::tan(pitchRad) * SPRITE_PITCH_DAMP));
-    (void)horizonSpriteBase;
-
     for (auto& s : sprs) {
         const int zPixels = int(std::lround(s.zWorld * pixelsPerUnitZ));
 
         int topY, bottomY;
         if (s.kind == 0) {
+            // Grounded enemy: feet land on ground line derived from same horizon
             const double depth = std::max(0.2, s.depth);
-            const int    colH  = int(std::abs((baseHeight * wallScale * std::cos(pitchRad)) / depth));
+            const int    colH  = int(std::abs((baseHeight * wallScale) / depth));
             const int    groundY = offsetY + horizonBase + colH / 2;
 
             const double texFootToScreen = ((STICKMAN_BASELINE + 0.5) * s.height) / double(SM_H);
             topY    = int(std::floor(groundY - texFootToScreen));
             bottomY = topY + s.height;
         } else {
+            // Bullets: centered around pitched horizon, with world Z offset
             const int centerY = offsetY + horizonBase - zPixels;
             topY    = centerY - s.height / 2;
             bottomY = topY + s.height;
@@ -397,99 +450,92 @@ void Renderer::renderWorldToBuffer(Framebuffer& fb, int bufferHeight,
         int deX = std::min(fb.pitchPixels - 1, s.width / 2 + s.screenX);
         if (dsX > deX) continue;
 
-if (s.kind == 0) {
-    const Enemy& en = enemies[s.idx];
+        if (s.kind == 0) {
+            const Enemy& en = enemies[s.idx];
 
-    // Visible height + floor contact
-    const float  scaleVis = Pose::visibleHeightScale(en);
-    const int    hVis     = std::max(1, int(std::round(s.height * scaleVis)));
-    const int    wVis     = s.width;
-    int          topYVis  = bottomY - hVis;
+            const float  scaleVis = Pose::visibleHeightScale(en);
+            const int    hVis     = std::max(1, int(std::round(s.height * scaleVis)));
+            const int    wVis     = s.width;
+            int          topYVis  = bottomY - hVis;
 
-    const int sinkSrc = Pose::groundDropSrcPx(en) + Pose::crawlPullExtraDropSrcPx(en);
-    const int sinkPx  = int(std::round(double(sinkSrc) * (double(hVis) / double(SM_H))));
-    topYVis += sinkPx; // ensure floor contact
+            const int sinkSrc = Pose::groundDropSrcPx(en) + Pose::crawlPullExtraDropSrcPx(en);
+            const int sinkPx  = int(std::round(double(sinkSrc) * (double(hVis) / double(SM_H))));
+            topYVis += sinkPx; // ensure floor contact
 
-    const int bottomYVis = topYVis + hVis;
-    const int deY        = std::min(bufferHeight - 1, bottomYVis);
+            const int bottomYVis = topYVis + hVis;
+            const int deY        = std::min(bufferHeight - 1, bottomYVis);
 
-    // Subtle forward lean: 0 at feet, max at head
-    const int leanSrc   = Pose::forwardLeanSrcPx(en);
-    const int leanPxMax = int(std::round(double(leanSrc) * (double(hVis) / double(SM_H))));
+            const int leanSrc   = Pose::forwardLeanSrcPx(en);
+            const int leanPxMax = int(std::round(double(leanSrc) * (double(hVis) / double(SM_H))));
 
-    const float flashT = (float)std::min(1.0, en.hitFlash / ENEMY_HIT_FLASH_SEC);
+            const float flashT = (float)std::min(1.0, en.hitFlash / ENEMY_HIT_FLASH_SEC);
 
-    for (int stripe = dsX; stripe <= deX; ++stripe) {
-        int lx = stripe - offsetX;
-        if (lx < 0 || lx >= W || !(s.depth < zbuffer[lx])) continue;
+            for (int stripe = dsX; stripe <= deX; ++stripe) {
+                int lx = stripe - offsetX;
+                if (lx < 0 || lx >= W || !(s.depth < zbuffer[lx])) continue;
 
-        // stripe -> source tex X
-        int texX = int((stripe - (-wVis / 2 + s.screenX)) * SM_W / double(wVis));
-        if ((unsigned)texX >= (unsigned)SM_W) continue;
+                int texX = int((stripe - (-wVis / 2 + s.screenX)) * SM_W / double(wVis));
+                if ((unsigned)texX >= (unsigned)SM_W) continue;
 
-        // no shear/tilt
-        const int topYStripe = topYVis;
+                const int topYStripe = topYVis;
 
-        const int startY = std::max(0, topYStripe);
-        for (int y = startY; y <= deY; ++y) {
-            int d    = y - topYStripe;
-            int texY = int((int64_t)d * SM_H / hVis);
-            if ((unsigned)texY >= (unsigned)SM_H) continue;
+                const int startY = std::max(0, topYStripe);
+                for (int y = startY; y <= deY; ++y) {
+                    int d    = y - topYStripe;
+                    int texY = int((int64_t)d * SM_H / hVis);
+                    if ((unsigned)texY >= (unsigned)SM_H) continue;
 
-            uint32_t px = g_stickman[texY * SM_W + texX];
-            if ((px >> 24) == 0) continue;
+                    uint32_t px = g_stickman[texY * SM_W + texX];
+                    if ((px >> 24) == 0) continue;
 
-            // limb masking: skip missing limbs
-            uint8_t m = g_stickman_mask[texY * SM_W + texX];
-            bool masked =
-                (!en.armL && m == SM_ArmL) ||
-                (!en.armR && m == SM_ArmR) ||
-                (!en.legL && m == SM_LegL) ||
-                (!en.legR && m == SM_LegR);
-            if (masked) continue;
+                    // limb masking
+                    uint8_t m = g_stickman_mask[texY * SM_W + texX];
+                    bool masked =
+                        (!en.armL && m == SM_ArmL) ||
+                        (!en.armR && m == SM_ArmR) ||
+                        (!en.legL && m == SM_LegL) ||
+                        (!en.legR && m == SM_LegR);
+                    if (masked) continue;
 
-            // forward lean toward camera (more at head)
-            int yLean = y + (leanPxMax * (SM_H - 1 - texY)) / (SM_H - 1);
+                    // forward lean toward camera (more at head)
+                    int yLean = y + (leanPxMax * (SM_H - 1 - texY)) / (SM_H - 1);
 
-            // arm reach: ONLY draw at shifted location (no original fill -> no “second arm”)
-            int yDst = yLean;
-            if ((m == SM_ArmL || m == SM_ArmR) && Pose::classify(en) == Pose::State::Crawl) {
-                const bool isLeft  = (m == SM_ArmL);
-                const int  reachSrc = Pose::armReachSrcPx(en, isLeft); // A = 4
-                const int  reachPx  = int(std::round(double(reachSrc) * (double(hVis) / double(SM_H))));
-                yDst += reachPx;
+                    // arm reach shift (crawl)
+                    int yDst = yLean;
+                    if ((m == SM_ArmL || m == SM_ArmR) && Pose::classify(en) == Pose::State::Crawl) {
+                        const bool isLeft  = (m == SM_ArmL);
+                        const int  reachSrc = Pose::armReachSrcPx(en, isLeft);
+                        const int  reachPx  = int(std::round(double(reachSrc) * (double(hVis) / double(SM_H))));
+                        yDst += reachPx;
+                    }
+
+                    if (flashT > 0.f) {
+                        uint8_t A = (px >> 24) & 255, R = (px >> 16) & 255, G = (px >> 8) & 255, B = px & 255;
+                        int r = int(R + (255 - R) * flashT);
+                        int g = int(G + ( 50 - G) * flashT);
+                        int b = int(B + ( 50 - B) * flashT);
+                        px = (uint32_t(A) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+                    }
+
+                    if ((unsigned)yDst < (unsigned)bufferHeight) {
+                        putPixel(fb, stripe, yDst, px);
+                    }
+                }
             }
-
-            // hit flash
-            if (flashT > 0.f) {
-                uint8_t A = (px >> 24) & 255, R = (px >> 16) & 255, G = (px >> 8) & 255, B = px & 255;
-                int r = int(R + (255 - R) * flashT);
-                int g = int(G + ( 50 - G) * flashT);
-                int b = int(B + ( 50 - B) * flashT);
-                px = (uint32_t(A) << 24) | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
-            }
-
-            if ((unsigned)yDst < (unsigned)bufferHeight) {
-                putPixel(fb, stripe, yDst, px);
-            }
-        }
-    }
-} else {
+        } else {
             // bullets
-            int topYb = topY;
-            int botYb = bottomY;
-            int dsY   = std::max(0, topYb);
-            int deY   = std::min(bufferHeight - 1, botYb);
+            int dsY   = std::max(0, topY);
+            int deY   = std::min(bufferHeight - 1, bottomY);
             if (dsY <= deY) {
                 for (int stripe = dsX; stripe <= deX; ++stripe) {
                     int lx = stripe - offsetX;
                     if (lx >= 0 && lx < W && s.depth < zbuffer[lx]) {
                         int texX = int((stripe - (-s.width / 2 + s.screenX)) * BL_W / double(s.width));
                         for (int y = dsY; y <= deY; ++y) {
-                            int d = y - topYb;
-                            int texY = int((d * BL_H) / double(s.height));
+                            int d = y - topY;
+                            int texY = int((int64_t)d * BL_H / s.height); // correct axis
                             if ((unsigned)texY >= (unsigned)BL_H || (unsigned)texX >= (unsigned)BL_W) continue;
-                            uint32_t px = g_bullet[texY * BL_H + texX];
+                            uint32_t px = g_bullet[texY * BL_W + texX];
                             if ((px >> 24) == 0) continue;
                             putPixel(fb, stripe, y, Modulate(px, 1.04f));
                         }

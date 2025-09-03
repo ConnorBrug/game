@@ -39,6 +39,10 @@ struct Bullet {
     double x, y;
     double vx, vy;
     double life;
-    double z;        // world height (constant per bullet)
-    double zSlope;   // dz per unit horizontal distance (unused here; keep 0.0)
+    double z;
+    double zSlope;
+    double zLockLeft;   // XY meters left before we “hit” the crosshair plane
+    double aimDirX;     // aim ray (player look) at fire time
+    double aimDirY;
+    bool   snapped;     // whether we already snapped direction to the aim ray
 };
